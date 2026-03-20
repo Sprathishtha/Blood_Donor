@@ -93,6 +93,7 @@ export function BloodBankDashboard() {
       `)
       .eq('user_id', authId)
       .eq('role', 'blood_bank')
+      .neq('status', 'declined')
       .gte('created_at', today.toISOString())
       .order('created_at', { ascending: false })
 
@@ -115,7 +116,7 @@ export function BloodBankDashboard() {
       hospital_name:n.blood_requests?.hospitals?.name,
       hospital_location:n.blood_requests?.hospitals?.location,
 
-      status:n.blood_requests?.status
+      status:n.status   // ✅ USE NOTIFICATION STATUS
 
     }))
 
@@ -177,28 +178,40 @@ export function BloodBankDashboard() {
   // ------------------------
   // Decline Request
   // ------------------------
+const handleDecline = async (id: number, requestId: string) => {
 
-  const handleDecline = async(id:number)=>{
+  try {
 
-    try{
+    // 1️⃣ Decline this notification
+    await supabase
+      .from("notifications")
+      .update({ status: "declined" })
+      .eq("id", id)
 
-      const { error } = await supabase
-        .from("notifications")
-        .update({ status:"declined" })
-        .eq("id",id)
+    // 2️⃣ Check if any pending notifications left
+    const { data: pending } = await supabase
+      .from("notifications")
+      .select("id")
+      .eq("request_id", requestId)
+      .eq("status", "pending")
 
-      if(error){
-        console.error(error)
-        return
-      }
+    // 3️⃣ If NONE → expire request
+    if (!pending || pending.length === 0) {
 
-      loadRequests()
+      await supabase
+        .from("blood_requests")
+        .update({ status: "expired" })
+        .eq("id", requestId)
 
-    }catch(err){
-      console.error(err)
     }
 
+    loadRequests()
+
+  } catch (err) {
+    console.error(err)
   }
+
+}
 
   const count = (status:string)=>
     requests.filter(r=>r.status===status).length
@@ -338,7 +351,7 @@ export function BloodBankDashboard() {
                         </button>
 
                         <button
-                          onClick={()=>handleDecline(r.notification_id)}
+                          onClick={()=>handleDecline(r.notification_id, r.request_id)}
                           className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
                         >
                           Decline
