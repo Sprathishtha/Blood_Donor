@@ -158,15 +158,15 @@ export function Header() {
             )}
 
             {/* Dashboard Icon */}
-            {(userType === 'hospital' || userType === 'bloodbank') && (
-              <button
-                onClick={() => navigate(getDashboardPath())}
-                title="Dashboard"
-                className="text-gray-600 hover:text-red-600"
-              >
-                <LayoutDashboard className="w-5 h-5" />
-              </button>
-            )}
+{(userType === 'hospital' || userType === 'bloodbank' || userType === 'donor') && (
+  <button
+    onClick={() => navigate(getDashboardPath())}
+    title="Dashboard"
+    className="text-gray-600 hover:text-red-600"
+  >
+    <LayoutDashboard className="w-5 h-5" />
+  </button>
+)}
 
             {/* Profile Dropdown */}
             <div className="relative" ref={profileRef}>

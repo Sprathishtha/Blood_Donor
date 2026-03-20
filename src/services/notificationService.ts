@@ -1,12 +1,22 @@
 // import { supabase } from "../lib/supabase";
 
+// /* -----------------------------
+// CREATE NOTIFICATIONS (24H EXPIRY)
+// ------------------------------ */
 // export async function createNotifications(notifications: any[]) {
 
 //   if (!notifications.length) return;
 
+//   const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+//   const dataToInsert = notifications.map(n => ({
+//     ...n,
+//     expires_at: expiry.toISOString()
+//   }));
+
 //   const { error } = await supabase
 //     .from("notifications")
-//     .insert(notifications);
+//     .insert(dataToInsert);
 
 //   if (error) {
 //     console.error("Notification insert error:", error);
@@ -14,6 +24,9 @@
 //   }
 // }
 
+// /* -----------------------------
+// UPDATE NOTIFICATION STATUS
+// ------------------------------ */
 // export async function updateNotificationStatus(
 //   notificationId: string,
 //   status: "accepted" | "declined"
@@ -23,6 +36,7 @@
 //     .from("notifications")
 //     .update({
 //       status,
+//       response: status,
 //       responded_at: new Date().toISOString()
 //     })
 //     .eq("id", notificationId);
@@ -30,59 +44,95 @@
 //   if (error) throw error;
 // }
 
-// export async function expirePendingNotificationsForRequest(requestId: string) {
+// /* -----------------------------
+// EXPIRE AFTER 24H
+// ------------------------------ */
+// export async function expireOldNotifications() {
 
 //   const { error } = await supabase
 //     .from("notifications")
 //     .update({ status: "expired" })
-//     .eq("request_id", requestId)
+//     .lt("expires_at", new Date().toISOString())
 //     .eq("status", "pending");
 
 //   if (error) throw error;
 // }
+
+// /* -----------------------------
+// DONOR RESPONSE (🔥 FIXED CORRECTLY)
+// ------------------------------ */
 // export const respondToNotification = async (
 //   notificationId: string,
 //   response: "accepted" | "declined"
 // ) => {
 
-//   const { data: notif } = await supabase
+//   /* ---------- GET NOTIFICATION ---------- */
+//   const { data: notif, error } = await supabase
 //     .from("notifications")
-//     .select("request_id,user_id")
+//     .select("request_id,user_id,role")
 //     .eq("id", notificationId)
-//     .single()
+//     .single();
 
-//   if (!notif) return
-
-//   const requestId = notif.request_id
-//   const donorId = notif.user_id
-
-//   if (response === "accepted") {
-
-//     await supabase
-//       .from("blood_requests")
-//       .update({
-//         status: "matched",
-//         matched_donor_id: donorId
-//       })
-//       .eq("id", requestId)
-
-//     await supabase
-//       .from("notifications")
-//       .update({ status: "expired" })
-//       .eq("request_id", requestId)
-//       .neq("id", notificationId)
-
+//   if (error || !notif) {
+//     console.error("Notification fetch error:", error);
+//     return;
 //   }
 
-//   await supabase
-//     .from("notifications")
+//   const requestId = notif.request_id;
+
+//   /* ---------- DECLINE ---------- */
+//   if (response === "declined") {
+//     await updateNotificationStatus(notificationId, "declined");
+//     return;
+//   }
+
+//   /* ---------- ACCEPT ---------- */
+
+//   // 1️⃣ update notification
+//   await updateNotificationStatus(notificationId, "accepted");
+
+//   /* ---------- 🔥 GET DONOR ID (CRITICAL FIX) ---------- */
+//   const { data: donor, error: donorError } = await supabase
+//     .from("donors")
+//     .select("id")
+//     .eq("auth_user_id", notif.user_id)
+//     .single();
+
+//   if (donorError || !donor) {
+//     console.error("Donor not found:", donorError);
+//     return;
+//   }
+
+//   /* ---------- 🔥 UPDATE BLOOD REQUEST ---------- */
+//   const { error: updateError } = await supabase
+//     .from("blood_requests")
 //     .update({
-//       status: response,
-//       response: response,
-//       responded_at: new Date().toISOString()
+//       status: "matched",
+//       matched_donor_id: donor.id   // ✅ CORRECT (NOT auth_user_id)
 //     })
-//     .eq("id", notificationId)
-// }
+//     .eq("id", requestId);
+
+//   if (updateError) {
+//     console.error("Request update error:", updateError);
+//   }
+
+//   /* ---------- DONOR COOLDOWN ---------- */
+//   await supabase
+//     .from("donors")
+//     .update({
+//       available: false,
+//       next_available_at: new Date(
+//         Date.now() + 60 * 24 * 60 * 60 * 1000
+//       )
+//     })
+//     .eq("auth_user_id", notif.user_id);
+// };
+
+
+
+// /* -----------------------------
+// GET USER NOTIFICATIONS
+// ------------------------------ */
 // export const getUserNotifications = async (
 //   userId: string,
 //   role: string
@@ -101,33 +151,42 @@
 //         blood_group,
 //         urgency_level,
 //         quantity,
-//         hospitals(name,address,phone)
+//         location,
+//         hospitals(name,address,phone,location)
 //       )
 //     `)
 //     .eq("user_id", userId)
 //     .eq("role", role)
-//     .neq("status", "expired")
-//     .order("created_at", { ascending: false })
+//     .in("status", ["pending", "accepted"])
+//     .order("created_at", { ascending: false });
 
 //   if (error) {
-//     console.error("Notification fetch error:", error)
-//     return []
+//     console.error("Notification fetch error:", error);
+//     return [];
 //   }
 
-//   return data
-// }
+//   return data;
+// };
+
 import { supabase } from "../lib/supabase";
 
 /* -----------------------------
-CREATE NOTIFICATIONS
+CREATE NOTIFICATIONS (24H)
 ------------------------------ */
 export async function createNotifications(notifications: any[]) {
 
   if (!notifications.length) return;
 
+  const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+  const dataToInsert = notifications.map(n => ({
+    ...n,
+    expires_at: expiry.toISOString()
+  }));
+
   const { error } = await supabase
     .from("notifications")
-    .insert(notifications);
+    .insert(dataToInsert);
 
   if (error) {
     console.error("Notification insert error:", error);
@@ -136,7 +195,7 @@ export async function createNotifications(notifications: any[]) {
 }
 
 /* -----------------------------
-UPDATE NOTIFICATION STATUS
+UPDATE STATUS
 ------------------------------ */
 export async function updateNotificationStatus(
   notificationId: string,
@@ -156,21 +215,19 @@ export async function updateNotificationStatus(
 }
 
 /* -----------------------------
-EXPIRE PENDING NOTIFICATIONS
+EXPIRE OLD
 ------------------------------ */
-export async function expirePendingNotificationsForRequest(requestId: string) {
+export async function expireOldNotifications() {
 
-  const { error } = await supabase
+  await supabase
     .from("notifications")
     .update({ status: "expired" })
-    .eq("request_id", requestId)
+    .lt("expires_at", new Date().toISOString())
     .eq("status", "pending");
-
-  if (error) throw error;
 }
 
 /* -----------------------------
-DONOR RESPONSE LOGIC
+DONOR RESPONSE
 ------------------------------ */
 export const respondToNotification = async (
   notificationId: string,
@@ -179,108 +236,60 @@ export const respondToNotification = async (
 
   const { data: notif, error } = await supabase
     .from("notifications")
-    .select("request_id,user_id")
+    .select("request_id,user_id,role")
     .eq("id", notificationId)
     .single();
 
   if (error || !notif) {
-    console.error("Notification fetch error", error);
+    console.error(error);
     return;
   }
 
   const requestId = notif.request_id;
 
   /* ---------- DECLINE ---------- */
-
   if (response === "declined") {
-
-    await supabase
-      .from("notifications")
-      .update({
-        status: "declined",
-        response: "declined",
-        responded_at: new Date().toISOString()
-      })
-      .eq("id", notificationId);
-
+    await updateNotificationStatus(notificationId, "declined");
     return;
   }
 
   /* ---------- ACCEPT ---------- */
 
+  await updateNotificationStatus(notificationId, "accepted");
+
+  /* 🔥 GET DONOR ID */
   const { data: donor } = await supabase
     .from("donors")
     .select("id")
     .eq("auth_user_id", notif.user_id)
     .single();
 
-  if (!donor) {
-    console.error("Donor not found");
-    return;
-  }
+  if (!donor) return;
 
-  /* mark notification accepted */
-
+  /* 🔥 UPDATE REQUEST */
   await supabase
-    .from("notifications")
-    .update({
-      status: "accepted",
-      response: "accepted",
-      responded_at: new Date().toISOString()
-    })
-    .eq("id", notificationId);
-
-
-  /* get request info */
-
-  const { data: request } = await supabase
     .from("blood_requests")
-    .select("quantity")
-    .eq("id", requestId)
-    .single();
+    .update({
+      status: "matched",
+      matched_donor_id: donor.id
+    })
+    .eq("id", requestId);
 
-  if (!request) return;
-
-  const requiredUnits = request.quantity;
-
-
-  /* count accepted donors */
-
-  const { data: accepted } = await supabase
-    .from("notifications")
-    .select("id")
-    .eq("request_id", requestId)
-    .eq("status", "accepted");
-
-  const acceptedUnits = accepted?.length || 0;
-
-
-  /* update request status */
-
-  if (acceptedUnits >= requiredUnits) {
-
-    await supabase
-      .from("blood_requests")
-      .update({
-        status: "matched"
-      })
-      .eq("id", requestId);
-
-
-    /* expire remaining notifications */
-
-    await supabase
-      .from("notifications")
-      .update({
-        status: "expired",
-        response: "expired"
-      })
-      .eq("request_id", requestId)
-      .eq("status", "pending");
-
-  }
-
+  /* 🔥 BLOCK DONOR 60 DAYS */
+  await supabase
+    .from("donors")
+    .update({
+      available: false,
+      next_available_at: new Date(
+        Date.now() + 60 * 24 * 60 * 60 * 1000
+      )
+    })
+    .eq("auth_user_id", notif.user_id);
 };
+
+/* -----------------------------
+GET NOTIFICATIONS
+------------------------------ */
 export const getUserNotifications = async (
   userId: string,
   role: string
@@ -295,23 +304,24 @@ export const getUserNotifications = async (
       sent_at,
       expires_at,
       response,
-      blood_requests!inner(
+      blood_requests(
         blood_group,
         urgency_level,
         quantity,
         location,
+        status,
         hospitals(name,address,phone,location)
       )
     `)
     .eq("user_id", userId)
     .eq("role", role)
-    .in("status", ["pending","accepted"])
+    .in("status", ["pending", "accepted"])
     .order("created_at", { ascending: false });
 
   if (error) {
-    console.error("Notification fetch error:", error);
+    console.error(error);
     return [];
   }
- console.log("Fetched notifications:", data);
-  return data;
+
+  return data || [];
 };

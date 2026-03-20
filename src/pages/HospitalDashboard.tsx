@@ -107,19 +107,29 @@ export function HospitalDashboard() {
   };
 
   const handleMarkFulfilled = async (requestId: string) => {
-    try {
-      const { error } = await supabase
-        .from('blood_requests')
-        .update({ status: 'completed' })
-        .eq('id', requestId);
+  try {
+    // 1️⃣ Mark request completed
+    await supabase
+      .from('blood_requests')
+      .update({ status: 'completed' })
+      .eq('id', requestId)
 
-      if (error) throw error;
-      await loadRequests();
-    } catch (err) {
-      console.error('Error marking request fulfilled:', err);
-      alert('Failed to mark request as fulfilled');
-    }
-  };
+    // 2️⃣ Expire ALL remaining notifications
+    await supabase
+      .from('notifications')
+      .update({
+        status: 'expired',
+        response: 'expired'
+      })
+      .eq('request_id', requestId)
+      .neq('status', 'accepted') // keep accepted one safe if needed
+
+    await loadRequests()
+
+  } catch (err) {
+    console.error(err)
+  }
+}
   const handleCancelRequest = async (requestId: string) => {
   try {
     // 1️⃣ Update request status
